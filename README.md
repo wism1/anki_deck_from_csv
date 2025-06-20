@@ -5,6 +5,7 @@ A web application that converts Excel/CSV files into Anki deck packages (.apkg) 
 ## Features
 
 - Upload Excel (.xlsx, .xls) or CSV files to generate Anki decks
+- Support for multiple choice questions with randomized answer choices
 - Support for images on both front and back of flashcards
 - Simple and intuitive user interface
 - Immediate download of generated Anki deck packages
@@ -47,7 +48,9 @@ python app.py
 
 ## Excel/CSV File Format
 
-Your Excel or CSV file should be structured as follows:
+### Basic Cards
+
+For basic flashcards, structure your Excel/CSV file as follows:
 
 | Front (Question) | Back (Answer) |
 |------------------|---------------|
@@ -57,7 +60,34 @@ Your Excel or CSV file should be structured as follows:
 | Identify this structure | [img:molecule.png] This is a glucose molecule |
 | ...              | ... |
 
+### Multiple Choice Questions
+
+For multiple choice questions with randomized options, format your file like this:
+
+| Front (Question with Options) | Back (Answer) |
+|------------------|---------------|
+| What is the capital of France?<br><br>A. London<br>B. Paris<br>C. Berlin<br>D. Madrid | B |
+| What is the primary purpose of a database index?<br><br>A. To improve query performance<br>B. To encrypt sensitive data<br>C. To compress data<br>D. To format query outputs<br>E. To create database backups | A |
+
+The application will:
+1. Automatically detect multiple choice format (options labeled A, B, C, etc.)
+2. Randomize the order of options each time the card is shown
+3. Show the correct answer on the back of the card
+
 Additional columns will be ignored.
+
+## Multiple Choice Questions
+
+### Benefits
+- **Randomized Options**: The app shuffles answer choices each time the card is shown to ensure you learn the content, not the position
+- **Standardized Format**: Perfect for exam preparation with consistent formatting
+- **Full Customization**: Support for 2-5 options (labeled A through E)
+
+### How It Works
+1. Format your questions as shown above with option labels (A, B, C, etc.)
+2. In the answer column, provide only the letter of the correct answer
+3. The app automatically detects this format and applies the multiple choice template
+4. When studying, options will appear in random order each time
 
 ## Using Images in Flashcards
 

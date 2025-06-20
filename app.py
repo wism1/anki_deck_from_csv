@@ -7,6 +7,7 @@ import io
 import shutil
 import uuid
 import re
+import json
 from flask import Flask, render_template, request, send_file, redirect, url_for, flash, session
 from werkzeug.utils import secure_filename
 from pathlib import Path
@@ -64,8 +65,84 @@ def process_content_for_images(content, image_files, deck_id):
     
     return content, media_files
 
+def detect_multiple_choice(front, back):
+    """Detect if this is a multiple choice question and extract choices"""
+    # Check if the back just contains a single letter (A, B, C, D, E) which indicates the answer
+    if re.match(r'^[A-E]$', back.strip()):
+        # Look for multiple choice options in the front content
+        options = {}
+        lines = front.split('\n')
+        question_text = []
+        current_option = None
+        option_content = []
+        
+        for line in lines:
+            # Check for option markers like "A." or "B." at the start of a line
+            option_match = re.match(r'^([A-E])[.:]\s*(.*)$', line.strip())
+            if option_match:
+                # If we were already collecting an option, save it
+                if current_option:
+                    options[current_option] = '\n'.join(option_content).strip()
+                    option_content = []
+                
+                # Start collecting a new option
+                current_option = option_match.group(1)
+                if option_match.group(2):  # If there's content on the same line
+                    option_content.append(option_match.group(2))
+            elif current_option:  # If we're collecting content for an option
+                option_content.append(line)
+            else:  # This is part of the question text
+                question_text.append(line)
+        
+        # Save the last option if there was one
+        if current_option and option_content:
+            options[current_option] = '\n'.join(option_content).strip()
+        
+        # If we found at least 2 options and a correct answer marker
+        if len(options) >= 2 and back.strip() in options:
+            return {
+                'is_multiple_choice': True,
+                'question': '\n'.join(question_text).strip(),
+                'options': options,
+                'correct_answer': back.strip()
+            }
+    
+    # Not a multiple choice question or couldn't parse it
+    return {'is_multiple_choice': False}
+
+def create_multiple_choice_card(question_data):
+    """Create HTML for a multiple choice question with randomized options"""
+    question = question_data['question']
+    options = question_data['options']
+    correct_answer = question_data['correct_answer']
+    correct_text = options[correct_answer]
+    
+    # Create the front side (question with randomized options)
+    front_html = f"<div class='question'>{question}</div>\n\n<div class='options'>\n"
+    front_html += "<script>\n"
+    front_html += "let options = " + json.dumps(options) + ";\n"
+    front_html += "let correct = " + json.dumps(correct_answer) + ";\n"
+    front_html += "let keys = Object.keys(options);\n"
+    front_html += "keys.sort(() => Math.random() - 0.5);\n"
+    front_html += "for (let i = 0; i < keys.length; i++) {\n"
+    front_html += "  document.write('<div class=\"option\"><strong>' + keys[i] + '.</strong> ' + options[keys[i]] + '</div>');\n"
+    front_html += "}\n"
+    front_html += "</script>\n"
+    front_html += "<noscript>\n"
+    
+    # Fallback for when JavaScript is disabled
+    for key, value in options.items():
+        front_html += f"<div class='option'><strong>{key}.</strong> {value}</div>\n"
+    
+    front_html += "</noscript>\n</div>"
+    
+    # Create the back side (showing the correct answer)
+    back_html = f"<div class='answer'><strong>The correct answer is {correct_answer}:</strong> {correct_text}</div>"
+    
+    return front_html, back_html
+
 def create_anki_deck(file_path, deck_name, image_files):
-    """Create an Anki deck from an Excel file with image support"""
+    """Create an Anki deck from an Excel file with image support and multiple choice"""
     # Read Excel file
     if file_path.endswith('.csv'):
         df = pd.read_csv(file_path)
@@ -80,8 +157,8 @@ def create_anki_deck(file_path, deck_name, image_files):
     deck_id = generate_random_id()
     model_id = generate_random_id()
     
-    # Create Anki model (card template)
-    model = genanki.Model(
+    # Create regular model (card template)
+    basic_model = genanki.Model(
         model_id,
         'Image Model',
         fields=[
@@ -95,6 +172,59 @@ def create_anki_deck(file_path, deck_name, image_files):
                 'afmt': '{{FrontSide}}<hr id="answer">{{Back}}',
             },
         ])
+    
+    # Create a unique model ID for multiple choice cards
+    mc_model_id = generate_random_id()
+    
+    # Create a model for multiple choice questions
+    mc_model = genanki.Model(
+        mc_model_id,
+        'Multiple Choice Model',
+        fields=[
+            {'name': 'Front'},
+            {'name': 'Back'},
+            {'name': 'MultipleChoiceData'},  # Hidden field for data to randomize options
+        ],
+        templates=[
+            {
+                'name': 'Multiple Choice Card',
+                'qfmt': '{{Front}}',
+                'afmt': '{{FrontSide}}<hr id="answer">{{Back}}',
+            },
+        ],
+        css="""
+        .card {
+            font-family: Arial, sans-serif;
+            font-size: 18px;
+            text-align: left;
+            background-color: #fff;
+            color: #333;
+            padding: 20px;
+        }
+        .question {
+            margin-bottom: 20px;
+        }
+        .options {
+            margin-top: 15px;
+        }
+        .option {
+            padding: 10px;
+            margin-bottom: 10px;
+            border: 1px solid #e0e0e0;
+            border-radius: 5px;
+        }
+        .answer {
+            font-weight: bold;
+            color: #2e7d32;
+        }
+        hr {
+            height: 1px;
+            border: none;
+            border-top: 1px solid #e0e0e0;
+            margin: 20px 0;
+        }
+        """
+    )
     
     # Create deck
     deck = genanki.Deck(deck_id, deck_name)
@@ -116,11 +246,29 @@ def create_anki_deck(file_path, deck_name, image_files):
         all_media_files.extend(front_media)
         all_media_files.extend(back_media)
         
-        # Create note and add to deck
-        note = genanki.Note(
-            model=model,
-            fields=[front_processed, back_processed]
-        )
+        # Check if this is a multiple choice question
+        mc_data = detect_multiple_choice(front_processed, back_processed)
+        
+        if mc_data['is_multiple_choice']:
+            # It's a multiple choice question
+            front_html, back_html = create_multiple_choice_card(mc_data)
+            
+            # Create note with multiple choice template
+            note = genanki.Note(
+                model=mc_model,
+                fields=[
+                    front_html,
+                    back_html,
+                    json.dumps(mc_data)  # Store the MC data for reference
+                ]
+            )
+        else:
+            # Regular card
+            note = genanki.Note(
+                model=basic_model,
+                fields=[front_processed, back_processed]
+            )
+            
         deck.add_note(note)
     
     # Create package with media files
@@ -148,7 +296,7 @@ def index():
     if 'session_id' not in session:
         session['session_id'] = str(uuid.uuid4())
     
-    return render_template('index.html')
+    return render_template('index.html', multiple_choice_enabled=True)
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
